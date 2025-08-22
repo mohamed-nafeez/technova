@@ -1,0 +1,17 @@
+# Core Image Processing
+Pillow
+opencv-python-headless
+numpy
+
+# AI/ML Models
+ultralytics
+transformers
+huggingface-hub
+sentence-transformers
+
+# OCR
+easyocr
+
+# Deep Learning Framework
+torch
+torchvision
