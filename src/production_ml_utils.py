@@ -169,8 +169,123 @@ def preprocess_image(image_path: str) -> tuple:
         print(f"❌ Image preprocessing error: {e}")
         return None, None, None
 
-def detect_billboards(image_path: str) -> List[Dict]:
-    """Production billboard detection with speed optimizations"""
+def check_billboard_presence(image_path: str) -> Dict:
+    """
+    Check if billboards are present in the image - returns yes/no with reason
+    
+    Args:
+        image_path: Path to image file
+        
+    Returns:
+        Dict with presence status, count, and reason
+    """
+    yolo_model, _, _ = model_manager.get_models()
+    if yolo_model is None:
+        return {
+            "billboard_present": "no",
+            "reason": "Model not loaded",
+            "billboard_count": 0,
+            "status": "error"
+        }
+    
+    # Preprocess image
+    original_img, processing_img, scale_factors = preprocess_image(image_path)
+    if processing_img is None:
+        return {
+            "billboard_present": "no", 
+            "reason": "Image preprocessing failed - invalid image file",
+            "billboard_count": 0,
+            "status": "error"
+        }
+    
+    try:
+        # Optimized YOLO inference
+        with torch.no_grad():
+            results = yolo_model.predict(
+                processing_img,
+                conf=Config.DETECTION_CONFIDENCE,
+                iou=0.5,
+                agnostic_nms=True,
+                max_det=10,
+                half=Config.ENABLE_GPU,
+                verbose=False,
+                save=False
+            )
+        
+        # Count valid detections
+        total_detections = 0
+        valid_detections = 0
+        
+        for idx, r in enumerate(results):
+            if not hasattr(r, "boxes") or r.boxes is None:
+                continue
+                
+            boxes = r.boxes.xyxy.cpu().numpy()
+            confs = r.boxes.conf.cpu().numpy()
+            
+            for i, (box, conf) in enumerate(zip(boxes, confs)):
+                total_detections += 1
+                
+                # Scale coordinates back to original
+                x1 = int(box[0] * scale_factors[0])
+                y1 = int(box[1] * scale_factors[1])
+                x2 = int(box[2] * scale_factors[0])
+                y2 = int(box[3] * scale_factors[1])
+                
+                # Validate detection
+                box_area = (x2 - x1) * (y2 - y1)
+                if box_area >= Config.MIN_DETECTION_SIZE ** 2:
+                    valid_detections += 1
+        
+        # Determine response based on detection count
+        if valid_detections == 0:
+            if total_detections == 0:
+                return {
+                    "billboard_present": "no",
+                    "reason": "No billboards detected in the image",
+                    "billboard_count": 0,
+                    "status": "success"
+                }
+            else:
+                return {
+                    "billboard_present": "no",
+                    "reason": f"Found {total_detections} potential billboards but all are too small or low confidence",
+                    "billboard_count": 0,
+                    "status": "success"
+                }
+        elif valid_detections == 1:
+            return {
+                "billboard_present": "yes",
+                "reason": "Single billboard detected successfully",
+                "billboard_count": 1,
+                "status": "success"
+            }
+        else:
+            return {
+                "billboard_present": "yes", 
+                "reason": f"Multiple billboards detected - found {valid_detections} billboards",
+                "billboard_count": valid_detections,
+                "status": "success"
+            }
+            
+    except Exception as e:
+        return {
+            "billboard_present": "no",
+            "reason": f"Detection failed due to error: {str(e)}",
+            "billboard_count": 0,
+            "status": "error"
+        }
+
+def get_billboard_crops(image_path: str) -> List[Dict]:
+    """
+    Extract cropped billboard images from the input image
+    
+    Args:
+        image_path: Path to image file
+        
+    Returns:
+        List of dictionaries containing cropped billboard images and metadata
+    """
     yolo_model, _, _ = model_manager.get_models()
     if yolo_model is None:
         return []
@@ -194,7 +309,7 @@ def detect_billboards(image_path: str) -> List[Dict]:
                 save=False
             )
         
-        detections = []
+        billboard_crops = []
         
         for idx, r in enumerate(results):
             if not hasattr(r, "boxes") or r.boxes is None:
@@ -228,19 +343,28 @@ def detect_billboards(image_path: str) -> List[Dict]:
                 # Only process high-confidence detections for OCR
                 should_process_ocr = conf >= Config.OCR_CONFIDENCE
                 
-                detections.append({
+                billboard_crops.append({
                     "crop_image": crop,
                     "bbox": [x1, y1, x2, y2],
                     "confidence": float(conf),
                     "confidence_percent": confidence_percent,
-                    "should_process_ocr": should_process_ocr
+                    "should_process_ocr": should_process_ocr,
+                    "crop_id": len(billboard_crops) + 1,
+                    "crop_size": (x2 - x1, y2 - y1)
                 })
         
-        return detections
+        return billboard_crops
         
     except Exception as e:
-        print(f"❌ Detection error: {e}")
+        print(f"❌ Crop extraction error: {e}")
         return []
+
+def detect_billboards(image_path: str) -> List[Dict]:
+    """
+    Legacy function - Production billboard detection with speed optimizations
+    Maintained for backward compatibility
+    """
+    return get_billboard_crops(image_path)
 
 def extract_text_from_crops(crops: List[np.ndarray]) -> List[Dict]:
     """Extract text from billboard crops with speed optimization"""
@@ -400,18 +524,23 @@ class ProductionBillboardAnalyzer:
             
             print(f"🔍 Analyzing: {os.path.basename(image_path)}")
             
-            # Step 1: Detect billboards
-            detection_start = time.time()
-            detections = detect_billboards(image_path)
-            detection_time = time.time() - detection_start
+            # Step 1: Check billboard presence
+            presence_start = time.time()
+            presence_check = check_billboard_presence(image_path)
+            presence_time = time.time() - presence_start
             
-            if not detections:
+            if presence_check["billboard_present"] == "no":
                 return {
                     "status": "no_billboards_detected",
-                    "message": "No billboards found in image",
+                    "message": presence_check["reason"],
                     "processing_time": time.time() - start_time,
-                    "performance": {"detection_time": round(detection_time, 3)}
+                    "performance": {"detection_time": round(presence_time, 3)}
                 }
+            
+            # Step 2: Get billboard crops
+            crop_start = time.time()
+            detections = get_billboard_crops(image_path)
+            crop_time = time.time() - crop_start
             
             # Filter for OCR processing
             high_conf_detections = [d for d in detections if d["should_process_ocr"]]
@@ -422,7 +551,7 @@ class ProductionBillboardAnalyzer:
                     "message": f"Found {len(detections)} billboards but all below OCR confidence threshold",
                     "total_billboards": len(detections),
                     "processing_time": time.time() - start_time,
-                    "performance": {"detection_time": round(detection_time, 3)}
+                    "performance": {"detection_time": round(presence_time + crop_time, 3)}
                 }
             
             print(f"✅ Found {len(high_conf_detections)} high-confidence billboards")
@@ -487,7 +616,7 @@ class ProductionBillboardAnalyzer:
                 "billboard_results": billboard_results,
                 "processing_time": round(total_time, 3),
                 "performance": {
-                    "detection_time": round(detection_time, 3),
+                    "detection_time": round(presence_time + crop_time, 3),
                     "ocr_time": round(ocr_time, 3),
                     "analysis_time": round(analysis_time, 3),
                     "total_time": round(total_time, 3)
