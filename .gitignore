@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+production_cache/
+billboard_crops/
+.venv/
+.env
+.DS_Store
