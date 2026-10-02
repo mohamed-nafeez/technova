@@ -1,0 +1,31 @@
+# FastAPI Backend Requirements for Billboard Analysis System
+
+# Core FastAPI and server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Async file handling
+aiofiles==23.2.1
+
+# Pydantic for data validation
+pydantic==2.5.0
+
+# HTTP and CORS
+httpx==0.25.2
+
+# Existing ML requirements (from main requirements.txt)
+torch>=1.9.0
+torchvision>=0.10.0
+opencv-python>=4.5.0
+easyocr>=1.6.0
+transformers>=4.20.0
+huggingface-hub>=0.10.0
+Pillow>=8.3.0
+numpy>=1.21.0
+ultralytics>=8.0.0
+
+# Additional backend utilities
+python-jose[cryptography]==3.3.0  # For JWT tokens if needed
+passlib[bcrypt]==1.7.4  # For password hashing if needed
+python-dotenv==1.0.0  # For environment variables
